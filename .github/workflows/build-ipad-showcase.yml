@@ -1,0 +1,80 @@
+name: Build iPad Showcase
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/ipad-showcase]
+
+concurrency:
+  group: ipad-showcase-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-full-unsigned-ipa:
+    name: Full unsigned device IPA
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.3"
+      - name: Record toolchain
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          git rev-parse HEAD
+      - name: Build simulator first
+        run: |
+          set -euo pipefail
+          DEST=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((x["udid"] for v in d["devices"].values() for x in v if x["isAvailable"] and x["name"].startswith("iPad")), ""))')
+          test -n "$DEST"
+          xcodebuild -project Example/Advanced.xcodeproj -scheme Advanced -configuration Release \
+            -destination "platform=iOS Simulator,id=$DEST" \
+            -derivedDataPath "$RUNNER_TEMP/ManifoldShowcaseSimulatorDD" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build | tee "$RUNNER_TEMP/simulator-build.log"
+      - name: Build generic iOS device app
+        run: |
+          set -euo pipefail
+          xcodebuild -project Example/Advanced.xcodeproj -scheme Advanced -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/ManifoldShowcaseDeviceDD" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' DEVELOPMENT_TEAM='' build | tee "$RUNNER_TEMP/device-build.log"
+      - name: Package and verify unsigned IPA
+        run: |
+          set -euo pipefail
+          APP=$(find "$RUNNER_TEMP/ManifoldShowcaseDeviceDD/Build/Products/Release-iphoneos" -maxdepth 1 -name '*.app' -print -quit)
+          test -n "$APP" && test -d "$APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist"
+          file "$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")" | grep -E 'arm64|Mach-O'
+          rm -rf "$RUNNER_TEMP/Payload"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/Payload/"
+          (cd "$RUNNER_TEMP" && zip -qry ManifoldKit-Showcase-Full-unsigned.ipa Payload)
+          unzip -l "$RUNNER_TEMP/ManifoldKit-Showcase-Full-unsigned.ipa" | grep -E '^.*Payload/[^/]+\.app/'
+          shasum -a 256 "$RUNNER_TEMP/ManifoldKit-Showcase-Full-unsigned.ipa" | tee "$RUNNER_TEMP/full.sha256"
+          stat -f '%z' "$RUNNER_TEMP/ManifoldKit-Showcase-Full-unsigned.ipa" | tee "$RUNNER_TEMP/full.size"
+          python3 - <<'PY2'
+          import json, os, pathlib, subprocess
+          ipa=pathlib.Path(os.environ['RUNNER_TEMP'])/'ManifoldKit-Showcase-Full-unsigned.ipa'
+          sha=subprocess.check_output(['shasum','-a','256',str(ipa)],text=True).split()[0]
+          size=ipa.stat().st_size
+          print(json.dumps({'commit':os.environ['GITHUB_SHA'],'bundle_id':'com.davidpovarsky.manifoldkitshowcase','artifact':ipa.name,'sha256':sha,'bytes':size,'signed':False,'variant':'Full'}))
+          PY2
+          cp "$RUNNER_TEMP/full.sha256" "$RUNNER_TEMP/ManifoldKit-Showcase-Full-unsigned.sha256"
+      - name: Upload Full artifact and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ManifoldKit-Showcase-Full-unsigned-IPA
+          path: |
+            ${{ runner.temp }}/ManifoldKit-Showcase-Full-unsigned.ipa
+            ${{ runner.temp }}/ManifoldKit-Showcase-Full-unsigned.sha256
+            ${{ runner.temp }}/simulator-build.log
+            ${{ runner.temp }}/device-build.log

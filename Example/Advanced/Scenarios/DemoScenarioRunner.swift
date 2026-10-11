@@ -2,6 +2,7 @@ import Foundation
 import ManifoldInference
 import ManifoldRuntime
 import ManifoldUI
+import ManifoldTools
 
 /// Composition seam shared by every entry point that launches a scenario:
 /// empty-state cards, the toolbar `Demos` menu, and the `--bck-demo-scenario`
@@ -47,7 +48,8 @@ enum DemoScenarioRunner {
         registry: ToolRegistry,
         sandboxRoot: URL,
         sessionStore: (any SessionStore)? = nil,
-        conversationRuntime: ConversationRuntime? = nil
+        conversationRuntime: ConversationRuntime? = nil,
+        scriptedBackend: ScriptedBackend? = nil
     ) async {
         guard !chat.isGenerating else { return }
 

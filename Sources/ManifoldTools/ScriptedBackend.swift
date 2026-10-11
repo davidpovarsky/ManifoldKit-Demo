@@ -29,6 +29,17 @@ public final class ScriptedBackend: InferenceBackend, @unchecked Sendable {
     /// without needing a real backend to observe it on the wire.
     public private(set) var receivedConfigs: [GenerationConfig] = []
 
+    /// Replaces the finite fixture and starts it from its first turn. Hosts
+    /// may call this between completed turns to replay a different scenario;
+    /// the inference pipeline and tool registry remain unchanged.
+    public func reset(with turns: [Turn]) {
+        guard !isGenerating else { return }
+        self.turns = turns
+        self.cursor = 0
+        self.nextCallId = 0
+        self.receivedHistories.removeAll()
+        self.receivedConfigs.removeAll()
+    }
     public init(turns: [Turn]) {
         self.turns = turns
         self.capabilities = BackendCapabilities(

@@ -33,6 +33,9 @@ struct ManifoldDemoApp: App {
     /// When `true`, the app was launched with `--uitesting` and should use
     /// an in-memory store, skip auto-model-load, and disable animations.
     private let isUITesting: Bool
+    /// Offline Demo is the safe first-launch mode. Live is opt-in via --live-mode.
+    private let isOfflineDemo: Bool
+    private let scriptedBackend: ScriptedBackend?
 
     /// Single-slot buffer for inbound payloads that land during the
     /// cold-launch window where the runtime is still being assembled.
@@ -47,7 +50,9 @@ struct ManifoldDemoApp: App {
 
     init() {
         let testing = CommandLine.arguments.contains("--uitesting")
+        let offlineDemo = !CommandLine.arguments.contains("--live-mode")
         self.isUITesting = testing
+        self.isOfflineDemo = offlineDemo
 
         let scenarioID = Self.demoScenarioID()
         self.pendingDemoScenarioID = scenarioID
@@ -66,8 +71,8 @@ struct ManifoldDemoApp: App {
         }
         // Configure ManifoldKit for this app
         let runtimeConfiguration = ManifoldConfiguration(
-            appName: "Manifold Demo",
-            bundleIdentifier: "com.manifoldkit.demo"
+            appName: "ManifoldKit Showcase",
+            bundleIdentifier: "com.davidpovarsky.manifoldkitshowcase"
         )
         self.runtimeConfiguration = runtimeConfiguration
         ManifoldConfiguration.shared = runtimeConfiguration
@@ -93,22 +98,22 @@ struct ManifoldDemoApp: App {
         self.toolApprovalGate = approvalGate
 
         let configuredService: InferenceService
-        #if DEBUG
-        if testing {
-            // Under --uitesting, swap in a ScriptedBackend so the approval UI
-            // can be exercised without live inference. The turn list is
-            // scenario-aware: when --bck-demo-scenario is supplied the script
-            // matches that scenario's expected tool-call shape; otherwise the
-            // legacy fallback (sample_repo_search) preserves existing tests.
+        let selectedScriptedBackend: ScriptedBackend?
+        if offlineDemo {
+            // This is a normal production/demo path, not a UI-test shortcut.
+            // The stock ChatView, ConversationRuntime and ToolRegistry remain
+            // responsible for every turn and tool/approval surface.
             let scripted = ScriptedBackend(turns: DemoScenarios.scriptedTurns(for: scenarioID))
+            selectedScriptedBackend = scripted
             configuredService = InferenceService(
                 backend: scripted,
-                name: "ScriptedUITest",
-                modelName: "scripted-ui",
+                name: "Offline Demo",
+                modelName: "scripted-demo",
                 toolRegistry: registry,
                 toolApprovalGate: approvalGate
             )
         } else {
+            selectedScriptedBackend = nil
             configuredService = InferenceService(
                 toolRegistry: registry,
                 toolApprovalGate: approvalGate
@@ -117,15 +122,7 @@ struct ManifoldDemoApp: App {
             CloudSaaSBackends.register(with: configuredService)
             FoundationBackends.register(with: configuredService)
         }
-        #else
-        configuredService = InferenceService(
-            toolRegistry: registry,
-            toolApprovalGate: approvalGate
-        )
-        OllamaBackends.register(with: configuredService)
-        CloudSaaSBackends.register(with: configuredService)
-        FoundationBackends.register(with: configuredService)
-        #endif
+        self.scriptedBackend = selectedScriptedBackend
         self.inferenceService = configuredService
 
         // ChatViewModel is constructed lazily in `installRuntime(using:)` once
@@ -157,7 +154,9 @@ struct ManifoldDemoApp: App {
                         sessionStore: runtime.persistence,
                         conversationRuntime: runtime.conversationRuntime,
                         pendingPayloadBuffer: pendingPayloadBuffer,
-                        pendingDemoScenarioID: pendingDemoScenarioID
+                        pendingDemoScenarioID: pendingDemoScenarioID,
+                        scriptedBackend: scriptedBackend,
+                        isOfflineDemo: isOfflineDemo
                     )
                     .environment(chatViewModel)
                     .environment(modelManagementViewModel)
@@ -360,7 +359,7 @@ struct ManifoldDemoApp: App {
             }
         }
 
-        if !isUITesting {
+        if !isUITesting && !isOfflineDemo {
             vm.refreshModels()
             vm.autoSelectFirstRunModel()
 

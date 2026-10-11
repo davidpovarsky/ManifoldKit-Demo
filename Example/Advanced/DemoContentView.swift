@@ -6,6 +6,7 @@ import ManifoldRuntime
 import ManifoldUI
 import ManifoldUIModelManagement
 import ManifoldVoice
+import ManifoldTools
 
 struct DemoContentView: View {
     @Environment(ChatViewModel.self) private var viewModel
@@ -70,6 +71,10 @@ struct DemoContentView: View {
     /// Optional demo-scenario ID supplied via `--bck-demo-scenario`. Resolved
     /// to a ``DemoScenario`` and run after the runtime-backed persistence is ready.
     var pendingDemoScenarioID: String?
+    /// The same backend instance used by InferenceService; reset before each
+    /// scenario so the finite fixture never leaks turns across cards.
+    let scriptedBackend: ScriptedBackend?
+    let isOfflineDemo: Bool
 
     var body: some View {
         // Read the gate's pending queue so SwiftUI observes changes and the
@@ -338,6 +343,10 @@ struct DemoContentView: View {
 
             // Simple model section
             VStack(alignment: .leading, spacing: 8) {
+                Label(isOfflineDemo ? "Offline demo · scripted responses" : "Live mode · provider required", systemImage: isOfflineDemo ? "wifi.slash" : "network")
+                    .font(.caption)
+                    .foregroundStyle(isOfflineDemo ? .orange : .secondary)
+                    .accessibilityIdentifier("demo-mode-label")
                 Text("Model")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -445,6 +454,13 @@ struct DemoContentView: View {
                 .keyboardShortcut("n", modifiers: .command)
             }
             ToolbarItem(placement: toolbarPlacement) {
+                Button { resetDemo() } label: {
+                    Label("Reset Demo / Replay", systemImage: "arrow.counterclockwise")
+                }
+                .accessibilityIdentifier("reset-demo-button")
+                .disabled(!isOfflineDemo || viewModel.isGenerating)
+            }
+            ToolbarItem(placement: toolbarPlacement) {
                 Menu {
                     ForEach(DemoScenarios.all) { scenario in
                         Button {
@@ -485,11 +501,16 @@ struct DemoContentView: View {
                 registry: toolRegistry,
                 sandboxRoot: sandboxRoot,
                 sessionStore: sessionStore,
-                conversationRuntime: conversationRuntime
+                conversationRuntime: conversationRuntime,
+                scriptedBackend: scriptedBackend
             )
         }
     }
 
+    private func resetDemo() {
+        scriptedBackend?.reset(with: DemoScenarios.scriptedTurns(for: nil))
+        viewModel.errorMessage = nil
+    }
     private var toolbarPlacement: ToolbarItemPlacement {
         #if os(iOS)
         .topBarTrailing
